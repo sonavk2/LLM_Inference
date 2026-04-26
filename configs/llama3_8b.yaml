@@ -1,0 +1,11 @@
+# Model spec consumed by the HF backend (and later vLLM / TensorRT-LLM).
+# Architectural params (layers, KV heads, head dim) are read from model.config
+# at load time, so they don't need to be duplicated here.
+#
+# NOTE: This model is gated on Hugging Face. Before running, accept the license
+# at https://huggingface.co/meta-llama/Meta-Llama-3-8B and run:
+#     huggingface-cli login
+
+model_id: meta-llama/Meta-Llama-3-8B
+dtype: bfloat16
+trust_remote_code: false

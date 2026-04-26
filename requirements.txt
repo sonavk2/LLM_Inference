@@ -1,0 +1,10 @@
+# Phase 1 baseline (Hugging Face Transformers).
+# Install PyTorch separately for your platform first — see README.
+# vLLM and TensorRT-LLM dependencies will live in separate requirements files
+# (added in Phase 3) because their installs are heavy and platform-specific.
+
+transformers>=4.40
+accelerate>=0.30
+pyyaml>=6.0
+pandas>=2.0
+tqdm>=4.65

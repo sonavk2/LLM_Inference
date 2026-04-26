@@ -1,0 +1,3 @@
+model_id: Qwen/Qwen3-9B
+dtype: bfloat16
+trust_remote_code: false

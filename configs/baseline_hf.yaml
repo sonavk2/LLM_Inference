@@ -1,0 +1,20 @@
+# Baseline experiment config: Hugging Face Transformers backend.
+# Pairs with a model config (configs/<model>.yaml).
+
+backend: huggingface
+model_config: configs/llama3_8b.yaml
+
+generation:
+  max_new_tokens: 128
+  do_sample: false
+  temperature: 1.0
+
+prompt:
+  # synthetic_repeat: tile a short seed string until the target token count is
+  # reached, then verify the final length with the tokenizer.
+  strategy: synthetic_repeat
+  default_context_length: 8192
+
+output:
+  results_path: results/baseline_hf.jsonl
+  format: jsonl

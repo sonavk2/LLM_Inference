@@ -1,0 +1,24 @@
+# Hardware profiles: device + dtype defaults plus metadata recorded in results.
+# The benchmark auto-detects the device when --hardware is omitted, but recording
+# an explicit profile name keeps results across machines easy to compare.
+
+profiles:
+  mac_mps:
+    device: mps
+    dtype: float16
+    notes: Apple Silicon GPU; limited memory, no peak-memory API
+
+  cpu:
+    device: cpu
+    dtype: float32
+    notes: Reference fallback; very slow at long context
+
+  nvidia_t4:
+    device: cuda
+    dtype: float16
+    memory_gb: 16
+
+  nvidia_a100:
+    device: cuda
+    dtype: bfloat16
+    memory_gb: 40
