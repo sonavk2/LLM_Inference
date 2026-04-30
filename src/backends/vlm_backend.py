@@ -34,6 +34,18 @@ _DTYPE_MAP = {
 }
 
 
+def _normalize_rope(rope_in, existing):
+    """Cross-version rope merger; same logic as hf_backend._normalize_rope."""
+    rope = dict(rope_in)
+    if "type" in rope and "rope_type" not in rope:
+        rope["rope_type"] = rope["type"]
+    if "rope_type" in rope and "type" not in rope:
+        rope["type"] = rope["rope_type"]
+    base = dict(existing) if existing else {}
+    base.update(rope)
+    return base
+
+
 @dataclass
 class GenerationResult:
     output_token_count: int
@@ -90,9 +102,15 @@ class VLMBackend:
         )
         if self.rope_scaling:
             # Qwen2-VL nests its text-stack config under .text_config; apply
-            # rope_scaling there if it exists, else on the top-level config.
+            # rope settings there if it exists, else on the top-level config.
             target = getattr(config, "text_config", None) or config
-            target.rope_scaling = dict(self.rope_scaling)
+            existing = (
+                getattr(target, "rope_parameters", None)
+                or getattr(target, "rope_scaling", None)
+            )
+            merged = _normalize_rope(self.rope_scaling, existing)
+            target.rope_scaling = merged
+            target.rope_parameters = merged
 
         self.model = _AutoVLM.from_pretrained(
             self.model_id,

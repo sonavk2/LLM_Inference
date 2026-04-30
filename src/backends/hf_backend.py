@@ -36,6 +36,24 @@ _DTYPE_MAP = {
 }
 
 
+def _normalize_rope(rope_in, existing):
+    """Build a merged rope dict that satisfies both transformers schemas.
+
+    transformers >= ~4.50 reads from ``config.rope_parameters[rope_type]``;
+    older versions read ``config.rope_scaling[type]``. We populate both names
+    AND merge into the model's existing rope dict so we don't blow away
+    ``base`` / ``rope_theta`` and crash ``_compute_yarn_parameters``.
+    """
+    rope = dict(rope_in)
+    if "type" in rope and "rope_type" not in rope:
+        rope["rope_type"] = rope["type"]
+    if "rope_type" in rope and "type" not in rope:
+        rope["type"] = rope["rope_type"]
+    base = dict(existing) if existing else {}
+    base.update(rope)
+    return base
+
+
 @dataclass
 class GenerationResult:
     output_token_count: int               # total new tokens, summed across batch
@@ -111,7 +129,13 @@ class HFBackend:
             self.model_id, trust_remote_code=self.trust_remote_code
         )
         if self.rope_scaling:
-            config.rope_scaling = dict(self.rope_scaling)
+            existing = (
+                getattr(config, "rope_parameters", None)
+                or getattr(config, "rope_scaling", None)
+            )
+            merged = _normalize_rope(self.rope_scaling, existing)
+            config.rope_scaling = merged
+            config.rope_parameters = merged
 
         load_kwargs = {
             "config": config,
