@@ -12,14 +12,13 @@ Independent-study benchmark for **long-context LLM inference**. Runs controlled 
 - Peak GPU memory and KV-cache growth
 - Success / OOM failure
 
-Phases, in order:
+Phases, in order — each gets one notebook in `notebooks/`:
 
-1. Single-request baseline on Hugging Face Transformers across three model types — instruction (Llama-3.1-8B-Instruct), reasoning architecture (Qwen3-8B), and VLM (Qwen2-VL-7B-Instruct) — sweeping context length 8k → 16k → 32k → 64k.
-1b. **Extension experiment**: T4 4-bit (NF4) quantization, same sweep, to compare whether quantization extends the feasible context length on a 16 GB GPU.
-2. Batched runs (batch sizes 1, 2, 4, 8) on the same baseline to see throughput vs. latency tradeoffs.
-3. Backend comparison: same workloads against vLLM and TensorRT-LLM.
+1. **`phase1_baseline.ipynb`** — single-request sweep across instruction (Llama-3.1-8B-Instruct), reasoning architecture (Qwen3-8B), and VLM (Qwen2-VL-7B-Instruct), context length 8k → 16k → 32k → 64k. T4 included as a single load-OOM data point; A100 is the main platform.
+2. **`phase2_batching.ipynb`** — Llama-3.1-8B-Instruct only, sweep batch size 1/2/4/8/16 at context 8k and 32k, single-prompt-tiled batches. Goal: latency vs throughput tradeoff and the (context × batch) memory frontier.
+3. *Planned* — `phase4_vllm.ipynb`: same workloads against vLLM (PagedAttention) for backend comparison.
 
-Hardware targets: local Mac (CPU/MPS), NVIDIA T4, NVIDIA A100. The hardware string is part of every result row.
+Hardware targets: NVIDIA A100 (primary). T4 documented in Phase 1 only (8B-class bf16 weights don't fit in 16 GB). Mac MPS supported by the harness but not used in the current sweeps.
 
 ### Phase 1 model lineup
 
@@ -37,7 +36,28 @@ Two layers that should stay decoupled:
 - **`src/benchmark/`** — backend-agnostic harness: config loading, prompt construction (text + VLM), metrics, memory probes, result writing. Knows nothing about HF / vLLM / TRT specifics.
 - **`src/backends/`** — one module per serving system (`hf_backend.py`, `vlm_backend.py`, later `vllm_backend.py`, `tensorrt_backend.py`), each implementing the same small interface (`load()`, `generate(prompt, max_new_tokens) → GenerationResult`). Adding a backend should not require touching the harness.
 
-Scripts in `scripts/` are thin CLI entry points that wire a config + a backend + a sweep dimension. Analysis (`src/analysis/`, `notebooks/`) reads from `results/` only — never re-runs experiments.
+Scripts in `scripts/` are thin CLI entry points that wire a config + a backend + a sweep dimension. Analysis cells live inside the per-phase notebooks and read from `results/` only — never re-run experiments.
+
+### Directory layout
+
+```
+notebooks/
+  phase1_baseline.ipynb    — single-request, model × context sweep (Phase 1)
+  phase2_batching.ipynb    — batched inference, batch × context sweep (Phase 2)
+  archive/                 — early scaffold notebooks, kept for reference
+
+scripts/
+  run_context_sweep.py     — Phase 1 text models
+  run_vlm_context_sweep.py — Phase 1 VLM
+  run_batch_experiment.py  — Phase 2
+  summarize_results.py     — text aggregator over JSONL files
+
+results/
+  phase1_<model>_<hw>.jsonl
+  phase2_<model>_<hw>.jsonl
+  plots/                   — PNGs written by the notebooks
+  archive/                 — pre-rewrite results files
+```
 
 ## Result schema
 
@@ -89,19 +109,26 @@ python scripts/run_vlm_context_sweep.py \
   --max-new-tokens 128 \
   --results-path results/phase1_qwen2vl_a100.jsonl
 
-# Extension — T4 4-bit Qwen3-8B (CUDA-only; needs bitsandbytes).
-python scripts/run_context_sweep.py \
+# Phase 2 — batched inference (Llama-3.1, batch 1/2/4/8/16 at ctx 8k & 32k).
+python scripts/run_batch_experiment.py \
   --config configs/baseline_hf.yaml \
-  --model-config configs/qwen3_8b_4bit_t4.yaml \
-  --context-lengths 8192 16384 32768 65536 \
-  --max-new-tokens 128 \
-  --results-path results/phase1_qwen3_4bit_t4.jsonl
+  --model-config configs/llama3_1_8b_instruct.yaml \
+  --context-lengths 8192 32768 \
+  --batch-sizes 1 2 4 8 16 \
+  --max-new-tokens 64 \
+  --results-path results/phase2_llama31_a100.jsonl
 
 # Aggregate
 python scripts/summarize_results.py --results-dir results/
 ```
 
+In Phase 2's JSONL, `tokens_per_second` is **aggregate** across the batch (sum of output tokens / total latency). Per-request throughput is `tokens_per_second / batch_size` and is computed in the analysis cell.
+
 Result files are named `<phase>_<model>_<hardware>.jsonl` so cross-platform comparisons join cleanly.
+
+## Workflow
+
+Notebooks are run in Colab; outputs are committed alongside the .ipynb files. Cursor and Colab both edit the repo, so **always `git pull` before starting work in either place** to avoid clobbering the other side's changes.
 
 ## Style
 

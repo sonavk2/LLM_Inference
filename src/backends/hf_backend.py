@@ -158,6 +158,11 @@ class HFBackend:
         """Run greedy generation. input_ids shape: (batch_size, seq_len)."""
         assert self.model is not None and self.tokenizer is not None, "Call load() first"
         input_ids = input_ids.to(self.device)
+        # Explicit attention mask: all prompts in our sweeps are the same length
+        # (batched runs tile one prompt N times), so the mask is just ones.
+        # Passing it explicitly silences HF's "attention mask is not set" warning
+        # and avoids ambiguity when pad_token_id == eos_token_id.
+        attention_mask = torch.ones_like(input_ids)
         timer = _FirstTokenTimer()
 
         # Synchronize CUDA before timing so we measure GPU work, not launch overhead.
@@ -167,6 +172,7 @@ class HFBackend:
 
         output = self.model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             pad_token_id=self.tokenizer.pad_token_id,
