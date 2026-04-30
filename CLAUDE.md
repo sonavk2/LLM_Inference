@@ -16,7 +16,7 @@ Phases, in order — each gets one notebook in `notebooks/`:
 
 1. **`phase1_baseline.ipynb`** — single-request sweep across instruction (Llama-3.1-8B-Instruct), reasoning architecture (Qwen3-8B), and VLM (Qwen2-VL-7B-Instruct), context length 8k → 16k → 32k → 64k. T4 included as a single load-OOM data point; A100 is the main platform.
 2. **`phase2_batching.ipynb`** — Llama-3.1-8B-Instruct only, sweep batch size 1/2/4/8/16 at context 8k and 32k, single-prompt-tiled batches. Goal: latency vs throughput tradeoff and the (context × batch) memory frontier.
-3. *Planned* — `phase4_vllm.ipynb`: same workloads against vLLM (PagedAttention) for backend comparison.
+3. **`phase4_vllm.ipynb`** — Llama-3.1-8B-Instruct only, runs both Phase 1 and Phase 2 sweep dimensions on the **vLLM** backend so the two backends can be plotted side by side. Headline question: how much do PagedAttention and continuous batching change throughput, TTFT, and the feasibility frontier vs the HF baseline. **TensorRT-LLM is in scope for the original plan but deferred** — engine compilation per model is too high-overhead for this study; vLLM alone covers the central PagedAttention / KV-cache claim.
 
 Hardware targets: NVIDIA A100 (primary). T4 documented in Phase 1 only (8B-class bf16 weights don't fit in 16 GB). Mac MPS supported by the harness but not used in the current sweeps.
 
@@ -34,7 +34,7 @@ Hardware targets: NVIDIA A100 (primary). T4 documented in Phase 1 only (8B-class
 Two layers that should stay decoupled:
 
 - **`src/benchmark/`** — backend-agnostic harness: config loading, prompt construction (text + VLM), metrics, memory probes, result writing. Knows nothing about HF / vLLM / TRT specifics.
-- **`src/backends/`** — one module per serving system (`hf_backend.py`, `vlm_backend.py`, later `vllm_backend.py`, `tensorrt_backend.py`), each implementing the same small interface (`load()`, `generate(prompt, max_new_tokens) → GenerationResult`). Adding a backend should not require touching the harness.
+- **`src/backends/`** — one module per serving system (`hf_backend.py`, `vlm_backend.py`, `vllm_backend.py`), each implementing the same small interface (`load()`, `generate(prompt, max_new_tokens) → GenerationResult`). Adding a backend should not require touching the harness.
 
 Scripts in `scripts/` are thin CLI entry points that wire a config + a backend + a sweep dimension. Analysis cells live inside the per-phase notebooks and read from `results/` only — never re-run experiments.
 
@@ -42,21 +42,25 @@ Scripts in `scripts/` are thin CLI entry points that wire a config + a backend +
 
 ```
 notebooks/
-  phase1_baseline.ipynb    — single-request, model × context sweep (Phase 1)
-  phase2_batching.ipynb    — batched inference, batch × context sweep (Phase 2)
-  archive/                 — early scaffold notebooks, kept for reference
+  phase1_baseline.ipynb         — single-request, model × context sweep (Phase 1)
+  phase2_batching.ipynb         — batched inference, batch × context sweep (Phase 2)
+  phase4_vllm.ipynb             — vLLM vs HF backend comparison (Phase 4)
+  archive/                      — early scaffold notebooks, kept for reference
 
 scripts/
-  run_context_sweep.py     — Phase 1 text models
-  run_vlm_context_sweep.py — Phase 1 VLM
-  run_batch_experiment.py  — Phase 2
-  summarize_results.py     — text aggregator over JSONL files
+  run_context_sweep.py          — Phase 1 text models (HF)
+  run_vlm_context_sweep.py      — Phase 1 VLM (HF)
+  run_batch_experiment.py       — Phase 2 (HF)
+  run_vllm_context_sweep.py     — Phase 4 single-request (vLLM)
+  run_vllm_batch_experiment.py  — Phase 4 batched (vLLM)
+  summarize_results.py          — text aggregator over JSONL files
 
 results/
   phase1_<model>_<hw>.jsonl
   phase2_<model>_<hw>.jsonl
-  plots/                   — PNGs written by the notebooks
-  archive/                 — pre-rewrite results files
+  phase4_<model>_<hw>.jsonl     — both Phase-4 sweeps in one file
+  plots/                        — PNGs written by the notebooks
+  archive/                      — pre-rewrite results files
 ```
 
 ## Result schema
@@ -118,11 +122,37 @@ python scripts/run_batch_experiment.py \
   --max-new-tokens 64 \
   --results-path results/phase2_llama31_a100.jsonl
 
+# Phase 4 — vLLM context sweep (single-request, mirrors Phase 1).
+pip install -r requirements-vllm.txt
+python scripts/run_vllm_context_sweep.py \
+  --config configs/baseline_hf.yaml \
+  --model-config configs/llama3_1_8b_instruct.yaml \
+  --context-lengths 8192 16384 32768 65536 \
+  --max-new-tokens 128 \
+  --max-model-len 65664 \
+  --results-path results/phase4_llama31_a100.jsonl
+
+# Phase 4 — vLLM batch sweep (mirrors Phase 2; appends to the same file).
+python scripts/run_vllm_batch_experiment.py \
+  --config configs/baseline_hf.yaml \
+  --model-config configs/llama3_1_8b_instruct.yaml \
+  --context-lengths 8192 32768 \
+  --batch-sizes 1 2 4 8 16 \
+  --max-new-tokens 64 \
+  --max-model-len 33024 \
+  --results-path results/phase4_llama31_a100.jsonl
+
 # Aggregate
 python scripts/summarize_results.py --results-dir results/
 ```
 
 In Phase 2's JSONL, `tokens_per_second` is **aggregate** across the batch (sum of output tokens / total latency). Per-request throughput is `tokens_per_second / batch_size` and is computed in the analysis cell.
+
+## Phase 4 / vLLM caveats
+
+- **Peak GPU memory is not comparable across backends.** vLLM pre-allocates ~90% of GPU memory upfront (controlled by `gpu_memory_utilization`) for the KV cache pool, so `peak_gpu_memory_gb` will look ~constant on every Phase-4 row regardless of context length. The `phase4_vllm.ipynb` plots intentionally drop peak memory from the comparison; the formula-based `kv_cache_memory_gb` (identical math for both backends) stays in.
+- **vLLM doesn't OOM where HF did.** Under workloads that crashed HF in Phase 2, vLLM serializes requests when the KV pool fills — `success` stays `True` but `total_latency` balloons because requests queue serially. The frontier figure shows this as "HF hard-fails; vLLM soft-degrades." Read the Pareto plot together with the frontier matrix; total latency tells you when soft degradation kicked in.
+- **TTFT comes from `RequestOutput.metrics`**, not a streamer hook. Requires `disable_log_stats=False` (default in our backend). The smoke-test cell in `phase4_vllm.ipynb` asserts that TTFT is non-null before the long sweep starts.
 
 Result files are named `<phase>_<model>_<hardware>.jsonl` so cross-platform comparisons join cleanly.
 

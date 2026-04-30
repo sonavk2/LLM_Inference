@@ -1,0 +1,9 @@
+# Phase 4 — vLLM backend.
+# Heavy install, pinned to a CUDA version (Colab A100 ships CUDA 12.x).
+# Install separately from base requirements:
+#   pip install -r requirements-vllm.txt
+#
+# vLLM pulls in xformers, ray, and a torch version that may not match the base.
+# If installed first, run base requirements after to upgrade pandas/etc.
+
+vllm>=0.6.0
