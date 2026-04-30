@@ -10,9 +10,12 @@ venv/
 .vscode/
 .idea/
 
-# Benchmark output (keep the directory itself via results/.gitkeep)
-results/*.jsonl
-results/*.csv
+# Benchmark output: keep phase results + plots in git, ignore scratch files.
+# Phase JSONLs (phase1_*, phase2_*, etc.) and results/plots/ are committed.
+results/dryrun*.jsonl
+results/*_smoke.jsonl
+results/archive/
+*.csv
 
 # HF cache, if anyone sets it locally
 .cache/
