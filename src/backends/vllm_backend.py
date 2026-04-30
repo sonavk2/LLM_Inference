@@ -89,38 +89,42 @@ class VLLMBackend:
         self.model_config = self.llm.llm_engine.model_config.hf_config
 
     def generate(self, input_ids, max_new_tokens):
-        """Run greedy generation. ``input_ids`` shape: (batch_size, seq_len)."""
+        """Run greedy generation. ``input_ids`` shape: (batch_size, seq_len).
+
+        Returns TTFT measured via a separate ``max_tokens=1`` call (vLLM's
+        V1 engine restructured ``RequestOutput.metrics`` and the
+        ``first_token_time`` field no longer exists; a 1-token generate is
+        pure prefill + 1 decode step, which is exactly the TTFT definition).
+        Total latency comes from the full ``max_new_tokens`` generate.
+        """
         from vllm import SamplingParams
         assert self.llm is not None, "Call load() first"
 
         # vLLM accepts pre-tokenized prompts; using token IDs avoids re-tokenizing
         # and keeps context_length exact.
         prompts = [{"prompt_token_ids": ids.tolist()} for ids in input_ids]
-        sampling_params = SamplingParams(
-            temperature=0.0,
-            max_tokens=max_new_tokens,
-            ignore_eos=True,  # always produce max_new_tokens, matches HF do_sample=False
-        )
 
+        # Stage 1: TTFT via a 1-token generation. Wall-clock-timed end-to-end.
+        sp_ttft = SamplingParams(temperature=0.0, max_tokens=1, ignore_eos=True)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        ttft_start = time.perf_counter()
+        _ = self.llm.generate(prompts, sp_ttft, use_tqdm=False)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        ttft_seconds = time.perf_counter() - ttft_start
+
+        # Stage 2: full generate for total latency + throughput.
+        sp_full = SamplingParams(
+            temperature=0.0, max_tokens=max_new_tokens, ignore_eos=True,
+        )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         start = time.perf_counter()
-        outputs = self.llm.generate(prompts, sampling_params, use_tqdm=False)
+        outputs = self.llm.generate(prompts, sp_full, use_tqdm=False)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         total_latency = time.perf_counter() - start
-
-        # TTFT: earliest first-token time across the batch (analogous to HF's
-        # streamer, which fires on the first decode step regardless of which
-        # sequence "owns" it).
-        ttft_seconds = None
-        per_request_ttfts = []
-        for out in outputs:
-            m = out.metrics
-            if m is not None and m.first_token_time is not None and m.arrival_time is not None:
-                per_request_ttfts.append(m.first_token_time - m.arrival_time)
-        if per_request_ttfts:
-            ttft_seconds = min(per_request_ttfts)
 
         total_tokens = sum(len(out.outputs[0].token_ids) for out in outputs)
         return GenerationResult(

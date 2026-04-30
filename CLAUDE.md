@@ -152,7 +152,7 @@ In Phase 2's JSONL, `tokens_per_second` is **aggregate** across the batch (sum o
 
 - **Peak GPU memory is not comparable across backends.** vLLM pre-allocates ~90% of GPU memory upfront (controlled by `gpu_memory_utilization`) for the KV cache pool, so `peak_gpu_memory_gb` will look ~constant on every Phase-4 row regardless of context length. The `phase4_vllm.ipynb` plots intentionally drop peak memory from the comparison; the formula-based `kv_cache_memory_gb` (identical math for both backends) stays in.
 - **vLLM doesn't OOM where HF did.** Under workloads that crashed HF in Phase 2, vLLM serializes requests when the KV pool fills — `success` stays `True` but `total_latency` balloons because requests queue serially. The frontier figure shows this as "HF hard-fails; vLLM soft-degrades." Read the Pareto plot together with the frontier matrix; total latency tells you when soft degradation kicked in.
-- **TTFT comes from `RequestOutput.metrics`**, not a streamer hook. Requires `disable_log_stats=False` (default in our backend). The smoke-test cell in `phase4_vllm.ipynb` asserts that TTFT is non-null before the long sweep starts.
+- **TTFT is measured via a two-stage generate**, not via `RequestOutput.metrics`. vLLM's V1 engine (default since ~0.7) restructured the metrics object and removed `first_token_time`. Our backend issues a `max_tokens=1` generate first (pure prefill + 1 decode = TTFT by definition), then a full `max_tokens=N` generate for total latency. Costs ~2× the wall time per cell but gives a clean, version-stable TTFT.
 
 Result files are named `<phase>_<model>_<hardware>.jsonl` so cross-platform comparisons join cleanly.
 
