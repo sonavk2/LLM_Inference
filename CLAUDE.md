@@ -2,13 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Status
-
-The repository is currently empty. This file describes the intended project so that the first scaffolding work has a clear target. When real code lands, update this file to match what actually exists — do not leave aspirational claims here once the code diverges.
-
 ## Project
 
-Independent-study benchmark for **long-context LLM inference**. The deliverable is a small, modular Python codebase that runs controlled inference experiments and records how prompt length, batch size, model choice, hardware, and serving framework affect:
+Independent-study benchmark for **long-context LLM inference**. Runs controlled inference experiments and records how prompt length, batch size, model choice, hardware, and serving framework affect:
 
 - TTFT (time to first token)
 - TPOT (time per output token)
@@ -18,52 +14,94 @@ Independent-study benchmark for **long-context LLM inference**. The deliverable 
 
 Phases, in order:
 
-1. Single-request baseline on Hugging Face Transformers, sweeping context length (8k → 16k → 32k → 64k).
+1. Single-request baseline on Hugging Face Transformers across three model types — instruction (Llama-3.1-8B-Instruct), reasoning architecture (Qwen3-8B), and VLM (Qwen2-VL-7B-Instruct) — sweeping context length 8k → 16k → 32k → 64k.
+1b. **Extension experiment**: T4 4-bit (NF4) quantization, same sweep, to compare whether quantization extends the feasible context length on a 16 GB GPU.
 2. Batched runs (batch sizes 1, 2, 4, 8) on the same baseline to see throughput vs. latency tradeoffs.
 3. Backend comparison: same workloads against vLLM and TensorRT-LLM.
 
 Hardware targets: local Mac (CPU/MPS), NVIDIA T4, NVIDIA A100. The hardware string is part of every result row.
 
+### Phase 1 model lineup
+
+| Slot | Model | Native ctx | Notes |
+|---|---|---|---|
+| Instruction | `meta-llama/Meta-Llama-3.1-8B-Instruct` | 131072 | Gated; `huggingface-cli login` first. |
+| Reasoning   | `Qwen/Qwen3-8B` | 32768 | YaRN factor=4 enabled so 64k is in the trained range. |
+| VLM         | `Qwen/Qwen2-VL-7B-Instruct` | 32768 | YaRN factor=4. Image-token count is subtracted from text target so total context = target. |
+| Extension   | Qwen3-8B + 4-bit NF4 | 32768 | T4-only; needs bitsandbytes. |
+
 ## Architecture intent
 
 Two layers that should stay decoupled:
 
-- **`src/benchmark/`** — backend-agnostic harness: config loading, prompt construction, metrics recording, memory probes, result writing. Knows nothing about HF/vLLM/TRT specifics.
-- **`src/backends/`** — one module per serving system (`hf_backend.py`, `vllm_backend.py`, `tensorrt_backend.py`), each implementing the same small interface (`load(model_cfg)`, `generate(prompts, max_new_tokens) -> GenerationResult`). Adding a backend should not require touching the harness.
+- **`src/benchmark/`** — backend-agnostic harness: config loading, prompt construction (text + VLM), metrics, memory probes, result writing. Knows nothing about HF / vLLM / TRT specifics.
+- **`src/backends/`** — one module per serving system (`hf_backend.py`, `vlm_backend.py`, later `vllm_backend.py`, `tensorrt_backend.py`), each implementing the same small interface (`load()`, `generate(prompt, max_new_tokens) → GenerationResult`). Adding a backend should not require touching the harness.
 
-Scripts in `scripts/` are thin CLI entry points that wire a config + a backend + a sweep dimension (context length or batch size) and write JSONL/CSV into `results/`. Analysis (`src/analysis/`, `notebooks/`) reads from `results/` only — never re-runs experiments.
+Scripts in `scripts/` are thin CLI entry points that wire a config + a backend + a sweep dimension. Analysis (`src/analysis/`, `notebooks/`) reads from `results/` only — never re-runs experiments.
 
-Start with one model end-to-end (e.g. `meta-llama/Llama-3-8B` or `Qwen/Qwen3-9B`) before generalizing.
+## Result schema
+
+Each JSONL row carries:
+
+- `model_name`, `backend`, `hardware` (e.g. `cuda:NVIDIA A100`), `context_length`, `batch_size`, `max_new_tokens`
+- `ttft_seconds`, `tpot_seconds`, `total_latency_seconds`, `tokens_per_second`
+- `peak_gpu_memory_gb`, `kv_cache_memory_gb`
+- `success`, `error`
+- `prompt_format`: `"synthetic_repeat"` or `"vlm_image+text"`
+- `is_native_context`: `true` if `context_length <= native_context`, else `false`. Lets you filter YaRN-extrapolated cells out of analysis.
+- `image_token_count`, `text_token_count`: VLM rows only. Sum equals `context_length`. **`image_token_count` includes chat-template scaffolding** (role markers, vision-start/end, bos/eos, generation prompt) — not image-pixel tokens alone — because that scaffolding is a fixed overhead we subtract from the text budget. `text_token_count` is the user-controllable text portion.
+- `quantization`: `"4bit-nf4"` for the extension experiment, else `null`.
 
 ## Non-obvious constraints
 
-- **Verify prompt token length with the tokenizer** after generating synthetic prompts. Don't trust character/word counts — long-context experiments are meaningless if the actual token count drifts from the target.
-- **Graceful degradation when CUDA is absent.** GPU-memory probes (`torch.cuda.reset_peak_memory_stats`, `max_memory_allocated`, `max_memory_reserved`) must be guarded; on Mac/CPU return `null` for those fields rather than crashing. The harness must run on a laptop even if no real numbers come back.
-- **OOM is a valid result, not a crash.** Catch it, record `success: false` with the error string, and continue the sweep.
-- **KV-cache memory is estimated, not measured**, using `2 × layers × batch × context × kv_heads × head_dim × bytes_per_element`. Pull the architectural constants from the model config; the factor of 2 is K + V. This estimate is what makes MHA/MQA/GQA differences visible in results.
-- **TTFT requires a streaming/token-callback path.** A first pass with `model.generate()` can only report total latency and approximate TPOT; plan to add a streaming path before the numbers are used for serious comparisons.
-- **Every result row records model, backend, hardware, context length, batch size, and max_new_tokens** alongside the metrics — results across machines/backends must be joinable without guessing.
+- **Verify prompt token length with the tokenizer / processor** after generating synthetic prompts. Don't trust character/word counts. For VLM, the image expands into N image tokens that count against the total — we subtract those from the text target so `context_length` is the true total.
+- **Graceful degradation when CUDA is absent.** Memory probes return `null` on Mac / CPU rather than crashing.
+- **OOM is a valid result, not a crash.** `runner.py` catches `torch.cuda.OutOfMemoryError` *and* generic `RuntimeError("...out of memory...")` flavors, records `success: false` with the error string, and continues the sweep. `torch.cuda.empty_cache()` is called between iterations on success too, so fragmentation doesn't push later cells into false OOMs.
+- **KV-cache memory is estimated, not measured**, using `2 × layers × batch × context × kv_heads × head_dim × bytes_per_element`. Architectural constants come from the model config; for VLMs we read `config.text_config` so MHA/MQA/GQA differences in the text stack still show up.
+- **TTFT is measured, not estimated**, via a `BaseStreamer` hook that timestamps the first generated token (skipping the prompt-tokens callback HF emits up front).
+- **YaRN is applied via `rope_scaling` on the model config before weights load.** Cells past `native_context` are tagged `is_native_context: false` so we can filter "extrapolated" rows out of fairness comparisons.
+- **Reasoning-mode caveat.** Phase 1 prompts are tiled "the quick brown fox" — no chat template, no `<think>` tags. The Qwen3-8B rows measure the *architecture* under generic tokens, not its reasoning-mode behavior. Do not write up "reasoning models are slower at decode" from this data alone.
 
-## Planned commands
-
-These are the intended CLI shapes; create the scripts to match.
+## Commands
 
 ```bash
-# Context-length sweep, single request
+# Phase 1 — text models. Use --model-config to swap models without
+# duplicating the experiment YAML.
 python scripts/run_context_sweep.py \
   --config configs/baseline_hf.yaml \
+  --model-config configs/llama3_1_8b_instruct.yaml \
   --context-lengths 8192 16384 32768 65536 \
-  --batch-size 1 --max-new-tokens 128
+  --max-new-tokens 128 \
+  --results-path results/phase1_llama31_a100.jsonl
 
-# Batch-size sweep at a fixed context length
-python scripts/run_batch_experiment.py \
+python scripts/run_context_sweep.py \
   --config configs/baseline_hf.yaml \
-  --context-length 8192 \
-  --batch-sizes 1 2 4 8 --max-new-tokens 128
+  --model-config configs/qwen3_8b.yaml \
+  --context-lengths 8192 16384 32768 65536 \
+  --max-new-tokens 128 \
+  --results-path results/phase1_qwen3_a100.jsonl
 
-# Aggregate results from results/*.jsonl
+# Phase 1 — VLM. Image is fixed; image_tokens are subtracted from the text target.
+python scripts/run_vlm_context_sweep.py \
+  --config configs/baseline_hf.yaml \
+  --model-config configs/qwen2_vl_7b.yaml \
+  --context-lengths 8192 16384 32768 65536 \
+  --max-new-tokens 128 \
+  --results-path results/phase1_qwen2vl_a100.jsonl
+
+# Extension — T4 4-bit Qwen3-8B (CUDA-only; needs bitsandbytes).
+python scripts/run_context_sweep.py \
+  --config configs/baseline_hf.yaml \
+  --model-config configs/qwen3_8b_4bit_t4.yaml \
+  --context-lengths 8192 16384 32768 65536 \
+  --max-new-tokens 128 \
+  --results-path results/phase1_qwen3_4bit_t4.jsonl
+
+# Aggregate
 python scripts/summarize_results.py --results-dir results/
 ```
+
+Result files are named `<phase>_<model>_<hardware>.jsonl` so cross-platform comparisons join cleanly.
 
 ## Style
 

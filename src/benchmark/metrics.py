@@ -35,6 +35,13 @@ def build_result_row(
     model_id, backend, hardware, context_length, batch_size, max_new_tokens,
     ttft, tpot, total_latency, tokens_per_second, peak_gpu_gb, kv_cache_gb,
     success, error,
+    # Optional metadata. Older callers can omit; rows from new callers carry the
+    # extra context that distinguishes YaRN-extrapolated cells and VLM rows.
+    prompt_format=None,
+    is_native_context=None,
+    image_token_count=None,
+    text_token_count=None,
+    quantization=None,
 ):
     """Assemble a single result row matching the JSONL schema in CLAUDE.md."""
     return {
@@ -52,4 +59,9 @@ def build_result_row(
         "kv_cache_memory_gb": kv_cache_gb,
         "success": success,
         "error": error,
+        "prompt_format": prompt_format,
+        "is_native_context": is_native_context,
+        "image_token_count": image_token_count,
+        "text_token_count": text_token_count,
+        "quantization": quantization,
     }

@@ -1,0 +1,19 @@
+# Reasoning-architecture slot for Phase 1.
+# Qwen3-8B is 32k native; YaRN is enabled so the 64k cell measures something
+# the model can actually attend over. Cells <= 32k are tagged is_native_context
+# in the result row; the 64k row is is_native_context=false.
+#
+# Note: this sweep uses tiled "quick brown fox" prompts, so it measures the
+# Qwen3 architecture under generic tokens, not its reasoning mode behavior
+# (no chat template, no <think> tags). Don't claim "reasoning models are
+# slower at decode" from this data alone.
+
+model_id: Qwen/Qwen3-8B
+dtype: bfloat16
+trust_remote_code: false
+native_context: 32768
+
+rope_scaling:
+  type: yarn
+  factor: 2.0   # 32768 * 2 = 65536 — exactly the 64k cell, not over-stretched.
+  original_max_position_embeddings: 32768

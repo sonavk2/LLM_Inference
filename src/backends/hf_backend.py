@@ -9,6 +9,13 @@ Implements the small contract used by src/benchmark/runner.py:
 Phase 1: greedy generation only, batch_size 1 expected. A custom streamer hook
 records the wall-clock time of the first generated token to give a real TTFT
 without needing a separate streaming-generation path.
+
+Two optional knobs from the model YAML:
+  - rope_scaling: passed through to AutoConfig before from_pretrained, so
+    Qwen-class 32k models can be extended to 64k via YaRN.
+  - quantization: when set (e.g. {load_in_4bit: true, ...}), a BitsAndBytesConfig
+    is built and the model is loaded with device_map='auto'. We then skip the
+    explicit .to(device) because bitsandbytes places the weights itself.
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.streamers import BaseStreamer
 
 
@@ -63,15 +70,32 @@ class _FirstTokenTimer(BaseStreamer):
 class HFBackend:
     name = "huggingface"
 
-    def __init__(self, model_id, dtype, device, trust_remote_code=False):
+    def __init__(
+        self, model_id, dtype, device, trust_remote_code=False,
+        rope_scaling: Optional[dict] = None,
+        quantization: Optional[dict] = None,
+    ):
         self.model_id = model_id
         self.dtype_str = dtype
         self.dtype = _DTYPE_MAP[dtype]
         self.device = device
         self.trust_remote_code = trust_remote_code
+        self.rope_scaling = rope_scaling
+        self.quantization = quantization
         self.tokenizer = None
         self.model = None
         self.model_config = None
+
+    def _build_quantization_config(self):
+        # transformers re-exports BitsAndBytesConfig at the top level, but
+        # pyright only resolves it via the underlying path.
+        from transformers.utils.quantization_config import BitsAndBytesConfig
+        q = dict(self.quantization or {})
+        # Translate string compute dtype to torch dtype if needed.
+        compute = q.get("bnb_4bit_compute_dtype")
+        if isinstance(compute, str):
+            q["bnb_4bit_compute_dtype"] = _DTYPE_MAP[compute]
+        return BitsAndBytesConfig(**q)
 
     def load(self):
         """Load tokenizer and model onto the target device."""
@@ -82,12 +106,26 @@ class HFBackend:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            torch_dtype=self.dtype,
-            trust_remote_code=self.trust_remote_code,
+        # Load the config first so we can mutate rope_scaling before weights load.
+        config = AutoConfig.from_pretrained(
+            self.model_id, trust_remote_code=self.trust_remote_code
         )
-        self.model.to(self.device)
+        if self.rope_scaling:
+            config.rope_scaling = dict(self.rope_scaling)
+
+        load_kwargs = {
+            "config": config,
+            "torch_dtype": self.dtype,
+            "trust_remote_code": self.trust_remote_code,
+        }
+        if self.quantization:
+            load_kwargs["quantization_config"] = self._build_quantization_config()
+            # bitsandbytes places weights itself; let it pick.
+            load_kwargs["device_map"] = "auto"
+
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, **load_kwargs)
+        if not self.quantization:
+            self.model.to(self.device)
         self.model.eval()
         self.model_config = self.model.config
 

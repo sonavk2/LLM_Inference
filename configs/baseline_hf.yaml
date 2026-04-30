@@ -2,7 +2,10 @@
 # Pairs with a model config (configs/<model>.yaml).
 
 backend: huggingface
-model_config: configs/llama3_8b.yaml
+# Default to the instruction-tuned slot. Use --model-config on the CLI to swap
+# in configs/qwen3_8b.yaml, configs/qwen2_vl_7b.yaml, or configs/qwen3_8b_4bit_t4.yaml
+# without copy-pasting an experiment YAML per model.
+model_config: configs/llama3_1_8b_instruct.yaml
 
 generation:
   max_new_tokens: 128

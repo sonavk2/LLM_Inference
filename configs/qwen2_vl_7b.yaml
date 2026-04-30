@@ -1,0 +1,15 @@
+# Vision-language slot for Phase 1.
+# Qwen2-VL-7B-Instruct: 32k native, 128k via YaRN.
+# The VLM sweep uses a fixed small image; image-token count is subtracted
+# from the text target so total_context exactly matches the requested length.
+
+model_id: Qwen/Qwen2-VL-7B-Instruct
+dtype: bfloat16
+trust_remote_code: false
+native_context: 32768
+is_vlm: true
+
+rope_scaling:
+  type: yarn
+  factor: 2.0   # 32768 * 2 = 65536 — exactly the 64k cell, not over-stretched.
+  original_max_position_embeddings: 32768

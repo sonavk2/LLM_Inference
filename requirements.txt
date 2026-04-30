@@ -3,8 +3,13 @@
 # vLLM and TensorRT-LLM dependencies will live in separate requirements files
 # (added in Phase 3) because their installs are heavy and platform-specific.
 
-transformers>=4.40
+transformers>=4.45        # AutoModelForImageTextToText (Qwen2-VL umbrella class)
 accelerate>=0.30
 pyyaml>=6.0
 pandas>=2.0
 tqdm>=4.65
+Pillow>=10.0              # VLM probe image construction
+
+# T4 4-bit extension experiment only. CUDA-only — skip on Mac/CPU.
+# Install with `pip install bitsandbytes` on the GPU machines.
+# bitsandbytes>=0.43

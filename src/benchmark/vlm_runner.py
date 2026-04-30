@@ -1,41 +1,35 @@
-"""Orchestrate one benchmark experiment: build prompt, run, collect metrics.
+"""VLM-specific single-experiment runner.
 
-OOM is treated as a valid result, not a crash: the row is recorded with
-success=False and the error string so a sweep can keep going past the
-memory wall.
+Parallels src/benchmark/runner.py but accepts an image-and-text prompt from
+src/benchmark/vlm_prompts and a VLMBackend whose generate() takes a processor
+batch dict, not a plain input_ids tensor.
 """
 
 import torch
 
 from src.benchmark.memory import reset_peak_memory, peak_memory_gb
 from src.benchmark.metrics import estimate_kv_cache_gb, build_result_row
-from src.benchmark.prompts import build_synthetic_prompt
+from src.benchmark.runner import _is_oom
+from src.benchmark.vlm_prompts import build_vlm_prompt
 
 
-def _is_oom(exc):
-    """Return True for the several flavors of OOM HF / torch can raise."""
-    if isinstance(exc, torch.cuda.OutOfMemoryError):
-        return True
-    msg = str(exc).lower()
-    return "out of memory" in msg or "cuda oom" in msg
-
-
-def run_single_experiment(
+def run_single_vlm_experiment(
     *, backend, context_length, batch_size, max_new_tokens, hardware_label,
-    is_native_context=None, quantization_label=None,
+    is_native_context=None,
 ):
-    """Run one (model, context, batch) point and return a result-row dict."""
+    """Run one VLM (image + text) point and return a result-row dict."""
 
-    # Pre-flight KV-cache estimate from architectural params. Recorded even
-    # if the run later OOMs, so memory pressure shows up as data.
     kv_cache_gb = estimate_kv_cache_gb(
         backend.model_config, context_length, batch_size, backend.dtype
     )
 
-    # Build a prompt at exact target length, then replicate for the batch.
-    input_ids, actual_len = build_synthetic_prompt(backend.tokenizer, context_length)
+    inputs, actual_total, image_tokens, text_tokens = build_vlm_prompt(
+        backend.processor, context_length
+    )
     if batch_size > 1:
-        input_ids = input_ids.repeat(batch_size, 1)
+        # Tile the per-tensor batch dim. Most processor outputs use dim 0 for
+        # batch; left as a pass-through for now since Phase 1 is single request.
+        raise NotImplementedError("VLM batch_size>1 not implemented yet.")
 
     reset_peak_memory(backend.device)
 
@@ -45,11 +39,11 @@ def run_single_experiment(
     total_latency = None
     output_tokens = 0
     try:
-        result = backend.generate(input_ids, max_new_tokens)
+        result = backend.generate(inputs, max_new_tokens)
         ttft = result.ttft_seconds
         total_latency = result.total_latency_seconds
         output_tokens = result.output_token_count
-    except Exception as e:  # noqa: BLE001 -- want to label OOM vs other
+    except Exception as e:  # noqa: BLE001
         if _is_oom(e):
             success = False
             error = f"CUDA OOM: {e}"
@@ -67,9 +61,6 @@ def run_single_experiment(
         tpot = None
         tps = None
 
-    # Free KV cache from a successful run too: HF holds onto it across
-    # generate() calls and fragmentation can otherwise push the next, larger
-    # context into a false OOM.
     if success and backend.device.startswith("cuda"):
         torch.cuda.empty_cache()
 
@@ -77,7 +68,7 @@ def run_single_experiment(
         model_id=backend.model_id,
         backend=backend.name,
         hardware=hardware_label,
-        context_length=actual_len,
+        context_length=actual_total,
         batch_size=batch_size,
         max_new_tokens=max_new_tokens,
         ttft=ttft,
@@ -88,7 +79,8 @@ def run_single_experiment(
         kv_cache_gb=kv_cache_gb,
         success=success,
         error=error,
-        prompt_format="synthetic_repeat",
+        prompt_format="vlm_image+text",
         is_native_context=is_native_context,
-        quantization=quantization_label,
+        image_token_count=image_tokens,
+        text_token_count=text_tokens,
     )
