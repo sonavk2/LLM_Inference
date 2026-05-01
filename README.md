@@ -109,8 +109,6 @@ requirements.txt          Base (HF Transformers)
 requirements-vllm.txt     Phase 4 only
 ```
 
-The harness is backend-agnostic. Adding a new backend means writing one module in `src/backends/` that implements `load()` and `generate(input_ids, max_new_tokens) → GenerationResult`; the rest of the framework doesn't change.
-
 ## Result files
 
 Each row in a `phase<N>_*.jsonl` carries: model, backend, hardware, context_length, batch_size, max_new_tokens, plus all measured metrics. OOMs land as `success: false` rows with the error string, so memory limits show up as data rather than gaps. See `CLAUDE.md` for the full schema and per-backend caveats.
