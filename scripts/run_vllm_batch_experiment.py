@@ -1,21 +1,4 @@
-"""vLLM variant of run_batch_experiment.py — Phase 4 batched-inference sweep.
-
-For each (context, batch) cell, submit ``batch_size`` identical prompts in one
-``llm.generate()`` call so vLLM's continuous batching takes over. The same
-prompt is tiled, so this is the apples-to-apples version of the Phase-2 HF
-sweep — same workload, different backend.
-
-Run from the repo root:
-
-    python scripts/run_vllm_batch_experiment.py \\
-        --config configs/baseline_hf.yaml \\
-        --model-config configs/llama3_1_8b_instruct.yaml \\
-        --context-lengths 8192 32768 \\
-        --batch-sizes 1 2 4 8 16 \\
-        --max-new-tokens 64 \\
-        --max-model-len 33024 \\
-        --results-path results/phase4_llama31_a100.jsonl
-"""
+"""Run a Phase-4 vLLM batch sweep (context x batch)."""
 
 import argparse
 import sys

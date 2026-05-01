@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def append_jsonl(path, row):
-    """Append one dict as a JSON line. Creates parent dirs if missing."""
+    """Append one row to a JSONL file, creating dirs as needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:

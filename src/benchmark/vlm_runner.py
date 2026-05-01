@@ -1,9 +1,4 @@
-"""VLM-specific single-experiment runner.
-
-Parallels src/benchmark/runner.py but accepts an image-and-text prompt from
-src/benchmark/vlm_prompts and a VLMBackend whose generate() takes a processor
-batch dict, not a plain input_ids tensor.
-"""
+"""Run one benchmark cell for VLM models."""
 
 import torch
 
@@ -17,7 +12,7 @@ def run_single_vlm_experiment(
     *, backend, context_length, batch_size, max_new_tokens, hardware_label,
     is_native_context=None,
 ):
-    """Run one VLM (image + text) point and return a result-row dict."""
+    """Run one VLM (image + text) point."""
 
     kv_cache_gb = estimate_kv_cache_gb(
         backend.model_config, context_length, batch_size, backend.dtype
@@ -27,8 +22,7 @@ def run_single_vlm_experiment(
         backend.processor, context_length
     )
     if batch_size > 1:
-        # Tile the per-tensor batch dim. Most processor outputs use dim 0 for
-        # batch; left as a pass-through for now since Phase 1 is single request.
+        # Keep this explicit until we validate batched processor outputs.
         raise NotImplementedError("VLM batch_size>1 not implemented yet.")
 
     reset_peak_memory(backend.device)

@@ -1,23 +1,12 @@
-"""Synthetic prompt construction with token-length verification.
+"""Build exact-length synthetic prompts for text sweeps."""
 
-Long-context experiments are meaningless if the actual token count drifts from
-the requested target, so prompts are built by tiling a seed string and then
-truncated to the exact target length using the tokenizer.
-"""
-
-# A short seed sentence; tiles and truncates to whatever target length is asked.
+# Repeated seed text used to fill long contexts.
 SEED = "The quick brown fox jumps over the lazy dog. "
 
 
 def build_synthetic_prompt(tokenizer, target_tokens):
-    """
-    Build a prompt of exactly `target_tokens` tokens.
-
-    Returns:
-        input_ids: torch.LongTensor of shape (1, target_tokens)
-        actual_token_count: int (always equals target_tokens after truncation)
-    """
-    # Overshoot first so we can truncate down to the exact target.
+    """Return `(input_ids, actual_token_count)` at the target token length."""
+    # Overshoot and truncate so token count lands exactly on target.
     text = SEED * (target_tokens // 5 + 16)
     encoding = tokenizer(
         text,

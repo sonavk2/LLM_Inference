@@ -1,24 +1,4 @@
-"""Sweep batch sizes (and optionally context lengths) for one model.
-
-Phase 2 — batched inference. For each (context_length, batch_size) pair we run
-greedy generation, replicate one prompt batch_size times, and record the same
-metrics as the single-request sweep. tokens_per_second is the AGGREGATE
-throughput across the batch; per-request throughput is `tokens_per_second
-/ batch_size` and is computed in the analysis notebook.
-
-OOM is recorded as success=False with the error string, same as Phase 1, so a
-sweep keeps going past the (context, batch) memory wall.
-
-Run from the repo root, e.g.:
-
-    python scripts/run_batch_experiment.py \\
-        --config configs/baseline_hf.yaml \\
-        --model-config configs/llama3_1_8b_instruct.yaml \\
-        --context-lengths 8192 32768 \\
-        --batch-sizes 1 2 4 8 16 \\
-        --max-new-tokens 64 \\
-        --results-path results/phase2_llama31_a100.jsonl
-"""
+"""Run a Phase-2 batch sweep over context length and batch size."""
 
 import argparse
 import sys
@@ -98,7 +78,7 @@ def main():
             )
             append_jsonl(results_path, row)
             if row["success"]:
-                # tokens_per_second is aggregate (output_tokens summed across batch).
+                # Throughput here is aggregate across the full batch.
                 per_req_tps = row["tokens_per_second"] / bsz
                 print(
                     f"  ok  ttft={row['ttft_seconds']:.3f}s "

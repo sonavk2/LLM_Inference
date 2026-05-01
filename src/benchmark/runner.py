@@ -1,8 +1,6 @@
-"""Orchestrate one benchmark experiment: build prompt, run, collect metrics.
+"""Run one benchmark cell and return a result row.
 
-OOM is treated as a valid result, not a crash: the row is recorded with
-success=False and the error string so a sweep can keep going past the
-memory wall.
+OOM is logged as data (`success=False`) so sweeps continue past failure points.
 """
 
 import torch
@@ -13,7 +11,7 @@ from src.benchmark.prompts import build_synthetic_prompt
 
 
 def _is_oom(exc):
-    """Return True for the several flavors of OOM HF / torch can raise."""
+    """Catch common CUDA OOM error variants."""
     if isinstance(exc, torch.cuda.OutOfMemoryError):
         return True
     msg = str(exc).lower()
@@ -24,15 +22,14 @@ def run_single_experiment(
     *, backend, context_length, batch_size, max_new_tokens, hardware_label,
     is_native_context=None, quantization_label=None,
 ):
-    """Run one (model, context, batch) point and return a result-row dict."""
+    """Run one (model, context, batch) point."""
 
-    # Pre-flight KV-cache estimate from architectural params. Recorded even
-    # if the run later OOMs, so memory pressure shows up as data.
+    # Record estimated KV upfront so OOM rows still carry memory context.
     kv_cache_gb = estimate_kv_cache_gb(
         backend.model_config, context_length, batch_size, backend.dtype
     )
 
-    # Build a prompt at exact target length, then replicate for the batch.
+    # Build exact-length prompt, then tile for batch runs.
     input_ids, actual_len = build_synthetic_prompt(backend.tokenizer, context_length)
     if batch_size > 1:
         input_ids = input_ids.repeat(batch_size, 1)
@@ -49,7 +46,7 @@ def run_single_experiment(
         ttft = result.ttft_seconds
         total_latency = result.total_latency_seconds
         output_tokens = result.output_token_count
-    except Exception as e:  # noqa: BLE001 -- want to label OOM vs other
+    except Exception as e:  # noqa: BLE001 - keep OOM separate from other errors
         if _is_oom(e):
             success = False
             error = f"CUDA OOM: {e}"
@@ -67,9 +64,7 @@ def run_single_experiment(
         tpot = None
         tps = None
 
-    # Free KV cache from a successful run too: HF holds onto it across
-    # generate() calls and fragmentation can otherwise push the next, larger
-    # context into a false OOM.
+    # HF can retain cache between runs; clear to reduce false OOM in next cell.
     if success and backend.device.startswith("cuda"):
         torch.cuda.empty_cache()
 

@@ -1,10 +1,7 @@
-"""Vision-language model backend (image + text inputs).
+"""HF-based VLM backend (image + text).
 
-Same small contract as HFBackend but the input is a multimodal batch from a
-processor, not a plain input_ids tensor. Used by scripts/run_vlm_context_sweep.py.
-
-Phase 1: greedy generation, single request. TTFT comes from a streamer hook
-just like the text backend.
+Follows the same harness contract as text backends, but `generate` takes a
+processor batch dict instead of plain `input_ids`.
 """
 
 from __future__ import annotations
@@ -17,10 +14,8 @@ import torch
 from transformers import AutoConfig, AutoProcessor
 from transformers.generation.streamers import BaseStreamer
 
-# AutoModelForImageTextToText is the umbrella class for newer VLMs (Qwen2-VL,
-# Llava-Next, etc.). On older transformers it may not exist; fall back to
-# AutoModelForVision2Seq, which covers the same models under the previous
-# umbrella name.
+# Newer transformers: AutoModelForImageTextToText.
+# Older versions: AutoModelForVision2Seq.
 try:
     from transformers import AutoModelForImageTextToText as _AutoVLM
 except ImportError:  # transformers < 4.45
@@ -35,7 +30,7 @@ _DTYPE_MAP = {
 
 
 def _normalize_rope(rope_in, existing):
-    """Cross-version rope merger; same logic as hf_backend._normalize_rope."""
+    """Merge RoPE keys so both config schemas are valid."""
     rope = dict(rope_in)
     if "type" in rope and "rope_type" not in rope:
         rope["rope_type"] = rope["type"]
@@ -54,7 +49,7 @@ class GenerationResult:
 
 
 class _FirstTokenTimer(BaseStreamer):
-    """Records wall-clock time of the first generated token (skips prompt put)."""
+    """Record TTFT while ignoring the initial prompt callback."""
 
     def __init__(self):
         self.start: Optional[float] = None
@@ -87,7 +82,7 @@ class VLMBackend:
         self.trust_remote_code = trust_remote_code
         self.rope_scaling = rope_scaling
         self.processor = None
-        self.tokenizer = None  # alias for runner compatibility
+        self.tokenizer = None  # alias so runner API stays consistent
         self.model = None
         self.model_config = None
 
@@ -101,8 +96,7 @@ class VLMBackend:
             self.model_id, trust_remote_code=self.trust_remote_code
         )
         if self.rope_scaling:
-            # Qwen2-VL nests its text-stack config under .text_config; apply
-            # rope settings there if it exists, else on the top-level config.
+            # Qwen2-VL stores text settings in text_config; others may not.
             target = getattr(config, "text_config", None) or config
             existing = (
                 getattr(target, "rope_parameters", None)
@@ -121,10 +115,7 @@ class VLMBackend:
         self.model.to(self.device)
         self.model.eval()
 
-        # KV-cache estimator reads num_hidden_layers / num_key_value_heads /
-        # hidden_size / num_attention_heads from this. Qwen2-VL puts those on
-        # text_config; expose that so estimate_kv_cache_gb sees the right
-        # numbers without special-casing the VLM in the harness.
+        # Point estimator to text stack config (where Qwen2-VL keeps these fields).
         self.model_config = getattr(self.model.config, "text_config", self.model.config)
 
     @torch.inference_mode()
@@ -132,7 +123,7 @@ class VLMBackend:
         """Run greedy generation. `inputs` is a BatchFeature from the processor."""
         assert self.model is not None and self.processor is not None, "Call load() first"
         assert self.tokenizer is not None, "Tokenizer not initialized; call load() first"
-        # Move every tensor in the batch onto the device.
+        # Move tensor fields in the processor batch to the target device.
         inputs = {
             k: (v.to(self.device) if isinstance(v, torch.Tensor) else v)
             for k, v in inputs.items()

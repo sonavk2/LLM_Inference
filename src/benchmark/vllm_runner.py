@@ -1,15 +1,6 @@
-"""vLLM-specific single-experiment runner.
+"""Run one benchmark cell on vLLM.
 
-Same shape as ``src/benchmark/runner.py`` but uses ``VLLMBackend``. Two notes
-about how the vLLM result rows differ semantically:
-
-  - ``peak_gpu_memory_gb`` reports the size of vLLM's pre-allocated KV cache
-    pool, not per-cell working memory. Don't compare it to HF's peak memory
-    directly — see CLAUDE.md Phase 4 section.
-  - vLLM rarely OOMs under loads that crash HF; instead it serializes requests
-    when the KV pool fills, so ``success=True`` even when ``total_latency``
-    is much larger than HF's failed-cell baseline. The analysis notebook
-    flags this as "soft degradation."
+Note: vLLM peak memory reflects its pre-allocated KV pool, not per-cell usage.
 """
 
 import torch
@@ -24,7 +15,7 @@ def run_single_vllm_experiment(
     *, backend, context_length, batch_size, max_new_tokens, hardware_label,
     is_native_context=None,
 ):
-    """Run one (context, batch) point on the vLLM backend."""
+    """Run one (context, batch) point on vLLM."""
 
     kv_cache_gb = estimate_kv_cache_gb(
         backend.model_config, context_length, batch_size, backend.dtype_str
@@ -46,7 +37,7 @@ def run_single_vllm_experiment(
         ttft = result.ttft_seconds
         total_latency = result.total_latency_seconds
         output_tokens = result.output_token_count
-    except Exception as e:  # noqa: BLE001 — we want to label OOM separately from other errors
+    except Exception as e:  # noqa: BLE001 - keep OOM separate from other errors
         if _is_oom(e):
             success = False
             error = f"CUDA OOM: {e}"

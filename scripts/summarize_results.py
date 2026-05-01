@@ -1,15 +1,4 @@
-"""Summarize JSONL benchmark results.
-
-Reads every *.jsonl file in --results-dir, prints:
-  - overall counts (runs, successes, failures)
-  - failure rows with their error strings
-  - means of latency / throughput / memory grouped by (model, backend, hardware)
-    and either context_length or batch_size
-  - the (model, backend) winner per context_length by tokens/sec
-
-Run from the repo root:
-    python scripts/summarize_results.py --results-dir results/
-"""
+"""Print quick summaries for benchmark JSONL result files."""
 
 import argparse
 import json
@@ -29,7 +18,7 @@ METRIC_COLS = [
 
 
 def load_results(results_dir):
-    """Read every *.jsonl file under results_dir into a single DataFrame."""
+    """Load all top-level JSONL files under `results_dir`."""
     rows = []
     for path in sorted(Path(results_dir).glob("*.jsonl")):
         with open(path, "r") as f:
@@ -66,7 +55,7 @@ def print_failures(df):
 
 
 def aggregate(df, group_by_extra):
-    """Group successful runs and print the mean of each metric."""
+    """Print mean metrics over successful runs, grouped by one extra key."""
     s = df[df["success"]]
     if s.empty:
         print(f"\n(No successful runs to aggregate by {group_by_extra}.)")
@@ -81,7 +70,7 @@ def aggregate(df, group_by_extra):
 
 
 def best_by_throughput(df):
-    """For each context length, show which (model, backend) had the highest tokens/sec."""
+    """Show throughput winner per context length."""
     s = df[df["success"] & df["tokens_per_second"].notna()]
     if s.empty:
         return

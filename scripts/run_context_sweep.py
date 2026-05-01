@@ -1,30 +1,10 @@
-"""Sweep one model across context lengths at fixed batch size, write JSONL results.
-
-Run from the repo root, e.g.:
-
-    # Llama-3.1-8B-Instruct (default model_config in baseline_hf.yaml)
-    python scripts/run_context_sweep.py \\
-        --config configs/baseline_hf.yaml \\
-        --context-lengths 8192 16384 32768 65536 \\
-        --max-new-tokens 128 \\
-        --results-path results/phase1_llama31_a100.jsonl
-
-    # Swap models without copy-pasting an experiment YAML:
-    python scripts/run_context_sweep.py \\
-        --config configs/baseline_hf.yaml \\
-        --model-config configs/qwen3_8b.yaml \\
-        --context-lengths 8192 16384 32768 65536 \\
-        --max-new-tokens 128 \\
-        --results-path results/phase1_qwen3_a100.jsonl
-
-Each iteration appends one row to the configured results path (JSONL).
-"""
+"""Run a context-length sweep and append rows to a JSONL file."""
 
 import argparse
 import sys
 from pathlib import Path
 
-# Put repo root on sys.path so `from src.X...` imports work without an install.
+# Allow direct script execution from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.backends.hf_backend import HFBackend
@@ -68,7 +48,7 @@ def main():
     args = parse_args()
     cfg = load_experiment_config(args.config)
     if args.model_config:
-        # CLI override wins so we don't have to clone an experiment YAML per model.
+        # CLI override lets us swap models without cloning experiment YAML files.
         cfg["model"] = load_yaml(args.model_config)
 
     model_cfg = cfg["model"]

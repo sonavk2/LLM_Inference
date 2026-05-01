@@ -163,3 +163,5 @@ Notebooks are run in Colab; outputs are committed alongside the .ipynb files. Cu
 ## Style
 
 Student/research-project Python: clear names, light comments, no premature abstraction. Add a backend or a metric only when an experiment needs it; resist building plugin systems before the second backend exists.
+
+checking if it works

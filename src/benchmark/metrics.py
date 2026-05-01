@@ -10,15 +10,7 @@ _DTYPE_BYTES = {
 
 
 def estimate_kv_cache_gb(model_config, context_length, batch_size, dtype):
-    """
-    Estimate KV-cache memory in GB.
-
-    Formula: 2 * num_layers * batch * context * num_kv_heads * head_dim * bytes
-    The factor of 2 accounts for keys and values.
-
-    Falls back to num_attention_heads when num_key_value_heads is absent,
-    so the estimate works for both standard MHA and GQA/MQA models.
-    """
+    """Estimate KV cache size in GB with the standard K+V formula."""
     n_layers = model_config.num_hidden_layers
     n_attn_heads = model_config.num_attention_heads
     n_kv_heads = getattr(model_config, "num_key_value_heads", n_attn_heads)
@@ -35,15 +27,14 @@ def build_result_row(
     model_id, backend, hardware, context_length, batch_size, max_new_tokens,
     ttft, tpot, total_latency, tokens_per_second, peak_gpu_gb, kv_cache_gb,
     success, error,
-    # Optional metadata. Older callers can omit; rows from new callers carry the
-    # extra context that distinguishes YaRN-extrapolated cells and VLM rows.
+    # Optional metadata used by newer sweeps/notebooks.
     prompt_format=None,
     is_native_context=None,
     image_token_count=None,
     text_token_count=None,
     quantization=None,
 ):
-    """Assemble a single result row matching the JSONL schema in CLAUDE.md."""
+    """Assemble one JSONL result row."""
     return {
         "model_name": model_id,
         "backend": backend,

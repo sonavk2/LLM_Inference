@@ -1,21 +1,9 @@
-"""Hugging Face Transformers backend for the benchmark.
+"""HF backend used by the benchmark harness.
 
-Implements the small contract used by src/benchmark/runner.py:
-  - .load()            pulls weights and tokenizer onto the device
-  - .generate(...)     runs generation, returns GenerationResult
-  - .tokenizer         exposed so the runner can build prompts of exact length
-  - .model_config      exposed so KV-cache estimation can read arch params
-
-Phase 1: greedy generation only, batch_size 1 expected. A custom streamer hook
-records the wall-clock time of the first generated token to give a real TTFT
-without needing a separate streaming-generation path.
-
-Two optional knobs from the model YAML:
-  - rope_scaling: passed through to AutoConfig before from_pretrained, so
-    Qwen-class 32k models can be extended to 64k via YaRN.
-  - quantization: when set (e.g. {load_in_4bit: true, ...}), a BitsAndBytesConfig
-    is built and the model is loaded with device_map='auto'. We then skip the
-    explicit .to(device) because bitsandbytes places the weights itself.
+Design choices:
+- Use a streamer hook to measure TTFT directly.
+- Apply RoPE edits on config before model weights load.
+- Let bitsandbytes place weights when quantization is enabled.
 """
 
 from __future__ import annotations
@@ -37,13 +25,7 @@ _DTYPE_MAP = {
 
 
 def _normalize_rope(rope_in, existing):
-    """Build a merged rope dict that satisfies both transformers schemas.
-
-    transformers >= ~4.50 reads from ``config.rope_parameters[rope_type]``;
-    older versions read ``config.rope_scaling[type]``. We populate both names
-    AND merge into the model's existing rope dict so we don't blow away
-    ``base`` / ``rope_theta`` and crash ``_compute_yarn_parameters``.
-    """
+    """Merge RoPE keys so old/new transformers configs both work."""
     rope = dict(rope_in)
     if "type" in rope and "rope_type" not in rope:
         rope["rope_type"] = rope["type"]
@@ -56,17 +38,13 @@ def _normalize_rope(rope_in, existing):
 
 @dataclass
 class GenerationResult:
-    output_token_count: int               # total new tokens, summed across batch
-    ttft_seconds: Optional[float]         # wall-clock time to first generated token
+    output_token_count: int               # new tokens across batch
+    ttft_seconds: Optional[float]         # wall-clock TTFT
     total_latency_seconds: float
 
 
 class _FirstTokenTimer(BaseStreamer):
-    """Streamer hook that records the wall-clock time of the first new token.
-
-    HF calls put() once with the prompt tokens and then once per generated token.
-    We skip the prompt call and stamp the first decode call.
-    """
+    """Record time of first generated token (skip prompt callback)."""
 
     def __init__(self):
         self.start: Optional[float] = None
@@ -105,11 +83,10 @@ class HFBackend:
         self.model_config = None
 
     def _build_quantization_config(self):
-        # transformers re-exports BitsAndBytesConfig at the top level, but
-        # pyright only resolves it via the underlying path.
+        # Keep this import path so pyright resolves the symbol.
         from transformers.utils.quantization_config import BitsAndBytesConfig
         q = dict(self.quantization or {})
-        # Translate string compute dtype to torch dtype if needed.
+        # YAML stores dtype as string; bitsandbytes expects torch.dtype.
         compute = q.get("bnb_4bit_compute_dtype")
         if isinstance(compute, str):
             q["bnb_4bit_compute_dtype"] = _DTYPE_MAP[compute]
@@ -120,11 +97,11 @@ class HFBackend:
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_id, trust_remote_code=self.trust_remote_code
         )
-        # Many causal LMs ship without a pad token; reuse EOS so generate() is happy.
+        # Most causal LMs do not define pad_token; EOS is safe for greedy decode.
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load the config first so we can mutate rope_scaling before weights load.
+        # Edit RoPE on config first so model init picks it up.
         config = AutoConfig.from_pretrained(
             self.model_id, trust_remote_code=self.trust_remote_code
         )
@@ -144,7 +121,7 @@ class HFBackend:
         }
         if self.quantization:
             load_kwargs["quantization_config"] = self._build_quantization_config()
-            # bitsandbytes places weights itself; let it pick.
+            # bitsandbytes handles placement; explicit .to(device) can conflict.
             load_kwargs["device_map"] = "auto"
 
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id, **load_kwargs)
@@ -158,14 +135,12 @@ class HFBackend:
         """Run greedy generation. input_ids shape: (batch_size, seq_len)."""
         assert self.model is not None and self.tokenizer is not None, "Call load() first"
         input_ids = input_ids.to(self.device)
-        # Explicit attention mask: all prompts in our sweeps are the same length
-        # (batched runs tile one prompt N times), so the mask is just ones.
-        # Passing it explicitly silences HF's "attention mask is not set" warning
-        # and avoids ambiguity when pad_token_id == eos_token_id.
+        # Prompts in each batch are same length, so mask is all ones.
+        # Passing it explicitly avoids pad/eos ambiguity warnings in HF.
         attention_mask = torch.ones_like(input_ids)
         timer = _FirstTokenTimer()
 
-        # Synchronize CUDA before timing so we measure GPU work, not launch overhead.
+        # Sync before/after timing so latency includes GPU work, not queued kernels.
         if self.device.startswith("cuda"):
             torch.cuda.synchronize()
         timer.start = time.perf_counter()

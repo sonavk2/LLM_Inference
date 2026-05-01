@@ -1,7 +1,6 @@
-"""Device detection and GPU memory probes.
+"""Device helpers and GPU-memory probes.
 
-Designed to degrade gracefully on Mac MPS / CPU (where peak-memory APIs aren't
-available), returning None instead of crashing.
+Returns `None` for unsupported memory probes (MPS/CPU) instead of crashing.
 """
 
 import torch
@@ -23,7 +22,7 @@ def reset_peak_memory(device):
 
 
 def peak_memory_gb(device):
-    """Return peak GPU memory in GB, or None if not measurable on this device."""
+    """Return peak allocated GPU memory in GB, else None."""
     if device.startswith("cuda"):
         return torch.cuda.max_memory_allocated() / 1e9
     return None

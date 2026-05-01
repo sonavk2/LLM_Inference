@@ -1,18 +1,4 @@
-"""vLLM variant of run_context_sweep.py — Phase 4 single-request sweep.
-
-Sweeps context length at batch_size=1 on the vLLM backend, mirroring the
-Phase-1 HF runs so the two can be plotted side by side.
-
-Run from the repo root:
-
-    python scripts/run_vllm_context_sweep.py \\
-        --config configs/baseline_hf.yaml \\
-        --model-config configs/llama3_1_8b_instruct.yaml \\
-        --context-lengths 8192 16384 32768 65536 \\
-        --max-new-tokens 128 \\
-        --max-model-len 65664 \\
-        --results-path results/phase4_llama31_a100.jsonl
-"""
+"""Run a Phase-4 vLLM context sweep (single-request)."""
 
 import argparse
 import sys
@@ -74,7 +60,7 @@ def main():
     rope_scaling = model_cfg.get("rope_scaling")
     native_context = model_cfg.get("native_context")
 
-    # Default max_model_len to "all requested contexts fit + decode budget".
+    # Default so every requested context can fit with decode budget.
     max_model_len = args.max_model_len or (max(args.context_lengths) + args.max_new_tokens + 8)
 
     device = detect_device()

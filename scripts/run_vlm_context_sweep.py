@@ -1,18 +1,4 @@
-"""VLM variant of run_context_sweep.py.
-
-Uses src/backends/vlm_backend + src/benchmark/vlm_prompts to drive image+text
-generation. The image is fixed (224x224 grey); image-token count is subtracted
-from the text target so the recorded context_length is the true total.
-
-Run from the repo root:
-
-    python scripts/run_vlm_context_sweep.py \\
-        --config configs/baseline_hf.yaml \\
-        --model-config configs/qwen2_vl_7b.yaml \\
-        --context-lengths 8192 16384 32768 65536 \\
-        --max-new-tokens 128 \\
-        --results-path results/phase1_qwen2vl_a100.jsonl
-"""
+"""Run a VLM context sweep with exact total-token prompts."""
 
 import argparse
 import sys
