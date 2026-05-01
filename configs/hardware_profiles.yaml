@@ -17,8 +17,21 @@ profiles:
     device: cuda
     dtype: float16
     memory_gb: 16
+    notes: 8B-class bf16 weights (~16 GB) do not fit; needs INT8/INT4 quant
+
+  nvidia_l4:
+    device: cuda
+    dtype: bfloat16
+    memory_gb: 24
+    notes: Fits 8B bf16 weights with limited KV-cache headroom
 
   nvidia_a100:
     device: cuda
     dtype: bfloat16
     memory_gb: 40
+
+  nvidia_h100:
+    device: cuda
+    dtype: bfloat16
+    memory_gb: 80
+    notes: Plenty of headroom for 8B-class models at 64k context
