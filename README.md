@@ -13,19 +13,17 @@ Per (model, context, batch, backend, hardware) cell:
 - **Estimated KV-cache memory** (formula-based, identical across backends)
 - **Success or OOM** — failures recorded as `success: false` rows, not crashes
 
-## Status
-
-Three phases complete on NVIDIA A100 (40 GB). Llama-3.1-8B-Instruct, Qwen3-8B, and Qwen2-VL-7B-Instruct were swept across 8k → 64k context, batched runs swept 1 → 16 at 8k & 32k, and the same workloads were re-run on vLLM for backend comparison. T4 is documented as a hardware-tier OOM data point. TensorRT-LLM was deferred (engine compilation overhead per model).
-
 ## Reproducing the experiments
 
 Each phase has one notebook under `notebooks/`. Open in Colab on an A100 runtime, run top-to-bottom.
 
 | Notebook | What it does |
 |---|---|
-| `phase1_baseline.ipynb` | Single-request sweep: 3 models × 4 context lengths |
-| `phase2_batching.ipynb` | Batched sweep: Llama-3.1, batch 1/2/4/8/16 at ctx 8k & 32k |
-| `phase4_vllm.ipynb`     | vLLM vs HF, mirrors Phase 1 + Phase 2 dimensions on Llama-3.1 |
+| `phase1_baseline.ipynb`   | Single-request sweep: 3 models × 4 context lengths |
+| `phase2_batching.ipynb`   | Batched sweep: Llama-3.1, batch 1/2/4/8/16 at ctx 8k & 32k |
+| _(Phase 3 — no notebook)_ | T4 hardware tier folded into README as a finding: 8B-class bf16 weights (~16 GB) cannot load on a 16 GB T4 at any context length |
+| `phase4_vllm.ipynb`       | vLLM vs HF, mirrors Phase 1 + Phase 2 dimensions on Llama-3.1 |
+| `phase5_tradeoffs.ipynb`  | Tradeoff analysis: 6 comparison plots + best-config CSV. No new measurements — synthesizes Phases 1/2/4 |
 
 Each notebook installs deps, runs the sweep, and writes:
 - A JSONL results file: `results/phase<N>_<model>_<hw>.jsonl`
